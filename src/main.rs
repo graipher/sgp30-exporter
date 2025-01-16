@@ -1,142 +1,147 @@
 use std::env;
 use std::error::Error;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
-use embedded_hal::delay::DelayNs;
 use hal::{Delay, I2cdev};
 use linux_embedded_hal as hal;
-use prometheus_exporter::prometheus::register_gauge;
-use prometheus_parse;
-use sgp30::FeatureSet;
-use sgp30::Humidity;
-use sgp30::Measurement;
-use sgp30::Sgp30;
+use prometheus_exporter::prometheus::{register_gauge, Gauge};
+use prometheus_parse::{Scrape, Value};
+use sgp30::{Humidity, Measurement, Sgp30};
+use tokio::time::sleep;
 
+const DEFAULT_PORT: &str = "9185";
+const DEFAULT_HUMIDITY_URL: &str = "http://raspberrypi5:9521/metrics";
+const DEFAULT_HUMIDITY_MAC: &str = "e9:60:94:11:db:5e";
+const I2C_DEVICE: &str = "/dev/i2c-1";
+const SGP30_ADDRESS: u8 = 0x58;
+
+/// Calculate vapor pressure (in hPa) from temperature (in °C).
 fn vapor_pressure(t: f64) -> f64 {
     6.112 * (17.67 * t / (243.5 + t)).exp()
 }
 
+/// Calculate absolute humidity (in g/m³) from temperature (in °C) and relative humidity (%).
 fn absolute_humidity(t: f64, rh: f64) -> f64 {
     vapor_pressure(t) * rh * 2.1674 / (273.15 + t)
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    println!("Hello, world!");
+/// Fetch and parse temperature and humidity metrics from the given URL.
+async fn fetch_humidity_metrics(
+    url: &str,
+    target_device: &str,
+) -> Result<(f64, f64), Box<dyn Error>> {
+    let body = reqwest::get(url).await?.text().await?;
+    let metrics = Scrape::parse(body.lines().map(|s| Ok(s.to_owned())).into_iter())?;
+    let mut temperature = None;
+    let mut humidity = None;
 
-    let port = env::var("PORT")
-        .or::<String>(Ok("9185".to_string()))
-        .unwrap();
-    println!("Listening on port :{}", port);
-    let binding = format!("0.0.0.0:{}", port).parse().unwrap();
-    let _exporter = prometheus_exporter::start(binding).unwrap();
+    for sample in metrics.samples {
+        if let Some(device) = sample.labels.get("device") {
+            if device == target_device {
+                match sample.metric.as_str() {
+                    "ruuvi_temperature_celsius" => {
+                        if let Value::Gauge(v) = sample.value {
+                            temperature = Some(v);
+                        }
+                    }
+                    "ruuvi_humidity_ratio" => {
+                        if let Value::Gauge(v) = sample.value {
+                            humidity = Some(v * 100.0); // Convert ratio to percentage
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 
-    let last_updated =
-        register_gauge!("sgp30_last_updated", "SGP30 last update UNIX timestamp").unwrap();
-    let process_start_time =
-        register_gauge!("process_start_time_seconds", "Start time of the process").unwrap();
+    match (temperature, humidity) {
+        (Some(t), Some(h)) => Ok((t, h)),
+        _ => Err("Failed to fetch temperature or humidity".into()),
+    }
+}
 
-    let tvoc = register_gauge!(
-        "sgp30_tvoc",
-        "Total volatile organic compounds in parts per billion"
-    )
-    .unwrap();
-    let co2eq = register_gauge!(
-        "sgp30_co2eq",
-        "Carbon dioxide equivalent in parts per million"
-    )
-    .unwrap();
+/// Initialize the SGP30 sensor and return its instance.
+fn initialize_sgp30() -> Result<Sgp30<I2cdev, Delay>, Box<dyn Error>> {
+    let dev = I2cdev::new(I2C_DEVICE)?;
+    let mut sgp = Sgp30::new(dev, SGP30_ADDRESS, Delay);
 
-    let mut now = SystemTime::now()
+    sgp.init().unwrap();
+    let serial_number = sgp.serial().unwrap();
+    let feature_set = sgp.get_feature_set().unwrap();
+
+    println!("SGP30 initialized with serial number: {:?}", serial_number);
+    println!("Feature set: {:?}", feature_set);
+
+    Ok(sgp)
+}
+
+/// Update Prometheus metrics.
+fn update_metrics(tvoc: &Gauge, co2eq: &Gauge, last_updated: &Gauge, measurement: &Measurement) {
+    tvoc.set(measurement.tvoc_ppb as f64);
+    co2eq.set(measurement.co2eq_ppm as f64);
+    let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
         .as_secs();
+    last_updated.set(now as f64);
+
+    println!(
+        "Updated metrics - CO₂eq: {} ppm, TVOC: {} ppb",
+        measurement.co2eq_ppm, measurement.tvoc_ppb
+    );
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let port = env::var("PORT").unwrap_or_else(|_| DEFAULT_PORT.to_string());
+    let binding = format!("0.0.0.0:{}", port).parse()?;
+    let _exporter = prometheus_exporter::start(binding)?;
+
+    let last_updated = register_gauge!("sgp30_last_updated", "Last update timestamp")?;
+    let process_start_time = register_gauge!(
+        "process_start_time_seconds",
+        "Process start time in seconds"
+    )?;
+    let tvoc = register_gauge!("sgp30_tvoc", "TVOC in ppb")?;
+    let co2eq = register_gauge!("sgp30_co2eq", "CO₂eq in ppm")?;
+
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)?
+        .as_secs();
     process_start_time.set(now as f64);
-    println!("Start time: {}", now);
 
-    let url = env::var("HUMIDITY_URL")
-        .or::<String>(Ok("http://raspberrypi5:9521/metrics".to_string()))
-        .unwrap();
-    let target_device = env::var("HUMIDITY_MAC")
-        .or::<String>(Ok("e9:60:94:11:db:5e".to_string()))
-        .unwrap();
-    let mut t: Option<f64> = None;
-    let mut h: Option<f64> = None;
+    println!("Exporter listening on port: {}", port);
 
-    let dev = I2cdev::new("/dev/i2c-1").unwrap();
-    let address = 0x58;
-    let mut sgp = Sgp30::new(dev, address, Delay);
+    let url = env::var("HUMIDITY_URL").unwrap_or_else(|_| DEFAULT_HUMIDITY_URL.to_string());
+    let target_device =
+        env::var("HUMIDITY_MAC").unwrap_or_else(|_| DEFAULT_HUMIDITY_MAC.to_string());
 
-    let serial_number: [u8; 6] = sgp.serial().unwrap();
-    println!("serial number: {:?}", serial_number);
-    let feature_set: FeatureSet = sgp.get_feature_set().unwrap();
-    println!("feature set: {:?}", feature_set);
+    let mut sgp = initialize_sgp30()?;
 
-    sgp.init().unwrap();
     loop {
-        let body = reqwest::get(url).await?.text().await?;
-        let lines: Vec<_> = body.lines().map(|s| Ok(s.to_owned())).collect();
-        let metrics = prometheus_parse::Scrape::parse(lines.into_iter())?;
-        for sample in metrics.samples.iter() {
-            if (sample.metric != "ruuvi_temperature_celsius"
-                && sample.metric != "ruuvi_humidity_ratio")
-                || sample.labels.get("device").unwrap() != target_device
-            {
-                continue;
-            }
-            println!(
-                "metric: {}, device: {}, value: {:?}",
-                sample.metric,
-                sample.labels.get("device").unwrap(),
-                match sample.value {
-                    prometheus_parse::Value::Gauge(v) => v,
-                    _ => panic!("unexpected value type"),
-                }
-            );
-            match sample.metric.as_str() {
-                "ruuvi_temperature_celsius" => {
-                    t = match sample.value {
-                        prometheus_parse::Value::Gauge(v) => Some(v),
-                        _ => panic!("unexpected value type"),
-                    };
-                }
-                "ruuvi_humidity_ratio" => {
-                    h = match sample.value {
-                        prometheus_parse::Value::Gauge(v) => Some(v),
-                        _ => panic!("unexpected value type"),
-                    };
-                }
-                _ => panic!("unexpected metric"),
-            }
-        }
-        println!(
-            "temperature: {}, relative humidity: {}, absolute humidity: {}",
-            t.unwrap(),
-            h.unwrap() * 100.0,
-            absolute_humidity(t.unwrap(), h.unwrap() * 100.0)
-        );
-        let h_abs =
-            Humidity::from_f32(absolute_humidity(t.unwrap(), h.unwrap() * 100.0) as f32).unwrap();
+        match fetch_humidity_metrics(&url, &target_device).await {
+            Ok((temperature, relative_humidity)) => {
+                println!(
+                    "Fetched metrics - Temperature: {:.2} °C, Humidity: {:.2} %",
+                    temperature, relative_humidity
+                );
 
-        match sgp.set_humidity(Some(&h_abs)) {
-            Ok(_) => {
-                println!("Humidity set to {:?}", h_abs);
-            }
-            Err(e) => {
-                println!("Error setting humidity: {:?}", e);
-            }
-        }
+                let abs_humidity = absolute_humidity(temperature, relative_humidity);
+                if let Ok(h_abs) = Humidity::from_f32(abs_humidity as f32) {
+                    if let Err(e) = sgp.set_humidity(Some(&h_abs)) {
+                        eprintln!("Failed to set humidity: {:?}", e);
+                    }
+                    println!("Setting humidity to {:.2} g/m^3", abs_humidity);
+                }
 
-        let measurement: Measurement = sgp.measure().unwrap();
-        co2eq.set(measurement.co2eq_ppm as f64);
-        println!("CO₂eq parts per million: {}", measurement.co2eq_ppm);
-        tvoc.set(measurement.tvoc_ppb as f64);
-        println!("TVOC parts per billion: {}", measurement.tvoc_ppb);
-        now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        last_updated.set(now as f64);
-        Delay.delay_ms(1000 - 12);
+                match sgp.measure() {
+                    Ok(measurement) => update_metrics(&tvoc, &co2eq, &last_updated, &measurement),
+                    Err(e) => eprintln!("Failed to measure: {:?}", e),
+                }
+            }
+            Err(e) => eprintln!("Failed to fetch humidity metrics: {:?}", e),
+        }
+        sleep(Duration::from_secs(5)).await;
     }
 }
