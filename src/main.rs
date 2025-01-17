@@ -7,7 +7,7 @@ use linux_embedded_hal as hal;
 use prometheus_exporter::prometheus::{register_gauge, Gauge};
 use prometheus_parse::{Scrape, Value};
 use sgp30::{Humidity, Measurement, Sgp30};
-use tokio::time::sleep;
+use tokio::{signal, time::sleep};
 
 const DEFAULT_PORT: &str = "9185";
 const DEFAULT_HUMIDITY_URL: &str = "http://raspberrypi5:9521/metrics";
@@ -92,6 +92,52 @@ fn update_metrics(tvoc: &Gauge, co2eq: &Gauge, last_updated: &Gauge, measurement
     );
 }
 
+/// Main loop to fetch humidity metrics and update the SGP30 sensor.
+async fn main_loop(
+    sgp: &mut Sgp30<I2cdev, Delay>,
+    tvoc: &Gauge,
+    co2eq: &Gauge,
+    last_updated: &Gauge,
+    url: &str,
+    target_device: &str,
+) -> Result<(), Box<dyn Error>> {
+    loop {
+        match fetch_humidity_metrics(url, target_device).await {
+            Ok((temperature, relative_humidity)) => {
+                println!(
+                    "Fetched metrics - Temperature: {:.2} °C, Humidity: {:.2} %",
+                    temperature, relative_humidity
+                );
+
+                let abs_humidity = absolute_humidity(temperature, relative_humidity);
+                if let Ok(h_abs) = Humidity::from_f32(abs_humidity as f32) {
+                    if let Err(e) = sgp.set_humidity(Some(&h_abs)) {
+                        eprintln!("Failed to set humidity: {:?}", e);
+                    } else {
+                        println!("Set absolute humidity to {:.2} g/m³", abs_humidity);
+                    }
+                }
+
+                match sgp.measure() {
+                    Ok(measurement) => update_metrics(tvoc, co2eq, last_updated, &measurement),
+                    Err(e) => eprintln!("Measurement failed: {:?}", e),
+                }
+            }
+            Err(e) => eprintln!("Failed to fetch humidity metrics: {:?}", e),
+        }
+
+        sleep(Duration::from_secs(5)).await;
+    }
+}
+
+/// Handle graceful shutdown.
+async fn shutdown_signal() {
+    signal::ctrl_c()
+        .await
+        .expect("Failed to install Ctrl+C handler");
+    println!("Shutdown signal received. Exiting...");
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let port = env::var("PORT").unwrap_or_else(|_| DEFAULT_PORT.to_string());
@@ -119,29 +165,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut sgp = initialize_sgp30()?;
 
-    loop {
-        match fetch_humidity_metrics(&url, &target_device).await {
-            Ok((temperature, relative_humidity)) => {
-                println!(
-                    "Fetched metrics - Temperature: {:.2} °C, Humidity: {:.2} %",
-                    temperature, relative_humidity
-                );
-
-                let abs_humidity = absolute_humidity(temperature, relative_humidity);
-                if let Ok(h_abs) = Humidity::from_f32(abs_humidity as f32) {
-                    if let Err(e) = sgp.set_humidity(Some(&h_abs)) {
-                        eprintln!("Failed to set humidity: {:?}", e);
-                    }
-                    println!("Setting humidity to {:.2} g/m^3", abs_humidity);
-                }
-
-                match sgp.measure() {
-                    Ok(measurement) => update_metrics(&tvoc, &co2eq, &last_updated, &measurement),
-                    Err(e) => eprintln!("Failed to measure: {:?}", e),
-                }
-            }
-            Err(e) => eprintln!("Failed to fetch humidity metrics: {:?}", e),
-        }
-        sleep(Duration::from_secs(5)).await;
+    tokio::select! {
+        _ = main_loop(&mut sgp, &tvoc, &co2eq, &last_updated, &url, &target_device) => {},
+        _ = shutdown_signal() => {},
     }
+    Ok(())
 }
