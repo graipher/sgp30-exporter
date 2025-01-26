@@ -105,9 +105,6 @@ jobs:
       id-token: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Log into registry ${{ env.REGISTRY }}
         uses: docker/login-action@v3.0.0
         with:
@@ -135,8 +132,7 @@ jobs:
         run: |
           echo "source linux-amd64: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest_linux-amd64 }}"
           echo "source linux-arm64: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest_linux-arm64 }}"
-          echo "target ${{ steps.meta.outputs.tags }}"
-          echo "tags: $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
+          echo "tags: $(jq -cr '.tags | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest_linux-amd64 }} \
