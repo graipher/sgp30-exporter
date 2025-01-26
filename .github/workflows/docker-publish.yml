@@ -23,6 +23,9 @@ jobs:
             platform: linux/amd64
           - os: ubuntu-24.04-arm
             platform: linux/arm64
+    outputs:
+      digest_linux_amd64: ${{ steps.export_digest.outputs.digest_linux_amd64 }}
+      digest_linux_arm64: ${{ steps.export_digest.outputs.digest_linux_arm64 }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -87,18 +90,9 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Export digest
+        id: export_digest
         run: |
-          mkdir -p ${{ runner.temp }}/digests
-          digest="${{ steps.build.outputs.digest }}"
-          echo "${digest}" > "${{ runner.temp }}/digests/${digest#sha256:}"
-
-      - name: Upload digest
-        uses: actions/upload-artifact@v4
-        with:
-          name: digests-${{ env.PLATFORM_PAIR }}
-          path: ${{ runner.temp }}/digests/*
-          if-no-files-found: error
-          retention-days: 1
+          echo "output_digest_${{ env.PLATFORM_PAIR }}=${{ steps.build.outputs.digest }}" >> $GITHUB_OUTPUT
 
   merge:
     runs-on: ubuntu-24.04
@@ -112,13 +106,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Download digests
-        uses: actions/download-artifact@v4
-        with:
-          path: ${{ runner.temp }}/digests
-          pattern: digests-*
-          merge-multiple: true
 
       - name: Log into registry ${{ env.REGISTRY }}
         uses: docker/login-action@v3.0.0
@@ -146,11 +133,12 @@ jobs:
         working-directory: ${{ runner.temp }}/digests
         id: create-manifest
         run: |
-          ls .
-          echo $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+          echo ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:${{ needs.build.outputs.digest_linux_amd64 }}
+          echo ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:${{ needs.build.outputs.digest_linux_arm64 }}
           docker buildx imagetools create \
             -t ${{ steps.meta.outputs.tags }} \
-            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:${{ needs.build.outputs.digest_linux_amd64 }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:${{ needs.build.outputs.digest_linux_arm64 }}
 
       - name: Extract multi-platform image digest
         id: extract-digest
