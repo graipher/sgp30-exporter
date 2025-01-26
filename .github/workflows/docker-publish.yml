@@ -146,6 +146,7 @@ jobs:
         working-directory: ${{ runner.temp }}/digests
         id: create-manifest
         run: |
+          ls .
           docker buildx imagetools create \
             -t ${{ steps.meta.outputs.tags }} \
             $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
