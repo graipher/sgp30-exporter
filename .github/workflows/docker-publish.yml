@@ -133,8 +133,13 @@ jobs:
       - name: Create and push multi-platform manifest
         id: create-manifest
         run: |
-          echo ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:${{ needs.build.outputs.digest_linux-amd64 }}
-          echo ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:${{ needs.build.outputs.digest_linux-arm64 }}
+          echo source linux-amd64: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest_linux-amd64 }}
+          echo source linux-arm64: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest_linux-arm64 }}
+          echo target ${{ steps.meta.outputs.tags }}
+          echo docker buildx imagetools create \
+            -t ${{ steps.meta.outputs.tags }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:${{ needs.build.outputs.digest_linux-amd64 }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:${{ needs.build.outputs.digest_linux-arm64 }}
           docker buildx imagetools create \
             -t ${{ steps.meta.outputs.tags }} \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:${{ needs.build.outputs.digest_linux-amd64 }} \
