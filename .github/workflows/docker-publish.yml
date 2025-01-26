@@ -39,6 +39,7 @@ jobs:
         run: |
           platform=${{ matrix.platform }}
           echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -92,7 +93,7 @@ jobs:
       - name: Export digest
         id: export_digest
         run: |
-          echo "output_digest_${{ env.PLATFORM_PAIR }}=${{ steps.build.outputs.digest }}" >> $GITHUB_OUTPUT
+          echo "digest_${{ env.PLATFORM_PAIR }}=${{ steps.build.outputs.digest }}" >> $GITHUB_OUTPUT
 
   merge:
     runs-on: ubuntu-24.04
@@ -130,7 +131,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
 
       - name: Create and push multi-platform manifest
-        working-directory: ${{ runner.temp }}/digests
         id: create-manifest
         run: |
           echo ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:${{ needs.build.outputs.digest_linux_amd64 }}
