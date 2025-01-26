@@ -80,10 +80,10 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache,mode=max
-          outputs: type=image,"name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}",push=true,push-by-digest=true,name-canonical=true
+          outputs: type=image,"name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}",push=${{ github.event_name != 'pull_request' }},push-by-digest=${{ github.event_name != 'pull_request' }},name-canonical=true
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Export digest
@@ -102,6 +102,7 @@ jobs:
 
   merge:
     runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request'
     needs: build
     permissions:
       contents: read
