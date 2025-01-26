@@ -14,6 +14,8 @@ const DEFAULT_HUMIDITY_URL: &str = "http://raspberrypi5:9521/metrics";
 const DEFAULT_HUMIDITY_MAC: &str = "e9:60:94:11:db:5e";
 const I2C_DEVICE: &str = "/dev/i2c-1";
 const SGP30_ADDRESS: u8 = 0x58;
+const TEMPERATURE_METRIC: &str = "ruuvi_temperature_celsius";
+const HUMIDITY_METRIC: &str = "ruuvi_humidity_ratio";
 
 /// Calculate vapor pressure (in hPa) from temperature (in °C).
 fn vapor_pressure(t: f64) -> f64 {
@@ -39,12 +41,12 @@ async fn fetch_humidity_metrics(
         if let Some(device) = sample.labels.get("device") {
             if device == target_device {
                 match sample.metric.as_str() {
-                    "ruuvi_temperature_celsius" => {
+                    TEMPERATURE_METRIC => {
                         if let Value::Gauge(v) = sample.value {
                             temperature = Some(v);
                         }
                     }
-                    "ruuvi_humidity_ratio" => {
+                    HUMIDITY_METRIC => {
                         if let Value::Gauge(v) = sample.value {
                             humidity = Some(v * 100.0); // Convert ratio to percentage
                         }
