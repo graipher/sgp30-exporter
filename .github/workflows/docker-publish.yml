@@ -119,9 +119,6 @@ jobs:
           pattern: digests-*
           merge-multiple: true
 
-      - name: Debug downloaded digests
-        run: ls -R ${{ runner.temp }}/digests
-
       - name: Log into registry ${{ env.REGISTRY }}
         uses: docker/login-action@v3.0.0
         with:
@@ -148,11 +145,9 @@ jobs:
         working-directory: ${{ runner.temp }}/digests
         id: create-manifest
         run: |
-          ls -R .
-          DIGESTS=$(ls . | sed "s|^|-d ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@|g")
           docker buildx imagetools create \
             -t ${{ steps.meta.outputs.tags }} \
-            $DIGESTS
+            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
 
       # Sign the resulting Docker image digest except on PRs.
       # This will only write to the public Rekor transparency log when the Docker
