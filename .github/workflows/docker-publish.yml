@@ -119,6 +119,9 @@ jobs:
           pattern: digests-*
           merge-multiple: true
 
+      - name: Debug downloaded digests
+        run: ls -R ${{ runner.temp }}/digests
+
       - name: Log into registry ${{ env.REGISTRY }}
         uses: docker/login-action@v3.0.0
         with:
@@ -145,7 +148,8 @@ jobs:
         working-directory: ${{ runner.temp }}/digests
         id: create-manifest
         run: |
-          DIGESTS=$(ls digests | sed "s/^/-d ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@/g")
+          ls -R .
+          DIGESTS=$(ls . | sed "s|^|-d ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@|g")
           docker buildx imagetools create \
             -t ${{ steps.meta.outputs.tags }} \
             $DIGESTS
