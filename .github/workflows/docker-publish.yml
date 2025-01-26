@@ -147,6 +147,7 @@ jobs:
         id: create-manifest
         run: |
           ls .
+          echo $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
           docker buildx imagetools create \
             -t ${{ steps.meta.outputs.tags }} \
             $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
