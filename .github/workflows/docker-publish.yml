@@ -145,7 +145,7 @@ jobs:
       - name: Extract multi-platform image digest
         id: extract-digest
         run: |
-          IMAGE_DIGEST="$(docker buildx imagetools inspect ${{ steps.meta.outputs.tags }} --format '{{json .Manifest}}' | jq -r '.digest')"
+          IMAGE_DIGEST="$(docker buildx imagetools inspect $(jq -cr '.tags.[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON") --format '{{json .Manifest}}' | jq -r '.digest')"
           echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> $GITHUB_ENV
 
       # Sign the resulting Docker image digest except on PRs.
