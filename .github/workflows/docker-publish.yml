@@ -24,8 +24,8 @@ jobs:
           - os: ubuntu-24.04-arm
             platform: linux/arm64
     outputs:
-      digest_linux_amd64: ${{ steps.export_digest.outputs.digest_linux_amd64 }}
-      digest_linux_arm64: ${{ steps.export_digest.outputs.digest_linux_arm64 }}
+      digest_linux-amd64: ${{ steps.export_digest.outputs.digest_linux-amd64 }}
+      digest_linux-arm64: ${{ steps.export_digest.outputs.digest_linux-arm64 }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -133,12 +133,12 @@ jobs:
       - name: Create and push multi-platform manifest
         id: create-manifest
         run: |
-          echo ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:${{ needs.build.outputs.digest_linux_amd64 }}
-          echo ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:${{ needs.build.outputs.digest_linux_arm64 }}
+          echo ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:${{ needs.build.outputs.digest_linux-amd64 }}
+          echo ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:${{ needs.build.outputs.digest_linux-arm64 }}
           docker buildx imagetools create \
             -t ${{ steps.meta.outputs.tags }} \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:${{ needs.build.outputs.digest_linux_amd64 }} \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:${{ needs.build.outputs.digest_linux_arm64 }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:${{ needs.build.outputs.digest_linux-amd64 }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:${{ needs.build.outputs.digest_linux-arm64 }}
 
       - name: Extract multi-platform image digest
         id: extract-digest
