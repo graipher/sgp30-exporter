@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 
 use hal::{Delay, I2cdev};
 use linux_embedded_hal as hal;
-use prometheus_exporter::prometheus::{register_gauge, Gauge};
+use prometheus_exporter::prometheus::{register_gauge, register_gauge_vec, Gauge};
 use prometheus_parse::{Scrape, Value};
 use sgp30::{Humidity, Measurement, Sgp30};
 use tokio::{signal, time::sleep};
@@ -158,6 +158,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .duration_since(SystemTime::UNIX_EPOCH)?
         .as_secs();
     process_start_time.set(now as f64);
+
+    let compile_datetime = compile_time::datetime_str!();
+    let rustc_version = compile_time::rustc_version_str!();
+    let rust_info = register_gauge_vec!(
+        "rust_info",
+        "Info about the Rust version",
+        &["rustc_version", "compile_time"]
+    )
+    .unwrap();
+    rust_info
+        .get_metric_with_label_values(&[rustc_version, compile_datetime])
+        .unwrap()
+        .set(1.);
 
     println!("Exporter listening on port: {}", port);
 

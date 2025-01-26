@@ -9,6 +9,7 @@ codegen-units = 1
 opt-level = 3
 
 [dependencies]
+compile-time = "0.2.0"
 embedded-hal = "1.0.0"
 linux-embedded-hal = "0.4.0"
 prometheus-parse = { git = "https://github.com/ccakes/prometheus-parse-rs.git", tag = "v0.2.5" }
