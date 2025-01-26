@@ -149,6 +149,12 @@ jobs:
             -t ${{ steps.meta.outputs.tags }} \
             $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
 
+      - name: Extract multi-platform image digest
+        id: extract-digest
+        run: |
+          IMAGE_DIGEST=$(docker buildx imagetools inspect ${{ steps.meta.outputs.tags }} --raw | jq -r '.manifests[].digest')
+          echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> $GITHUB_ENV
+
       # Sign the resulting Docker image digest except on PRs.
       # This will only write to the public Rekor transparency log when the Docker
       # repository is public to avoid leaking data.  If you would like to publish
@@ -156,8 +162,8 @@ jobs:
       # https://github.com/sigstore/cosign
       - name: Sign the multi-platform image
         run: |
-          cosign sign --yes ${{ steps.meta.outputs.tags }}
+          cosign sign --recursive --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ env.IMAGE_DIGEST }}
 
       - name: Inspect signed image
         run: |
-          docker buildx imagetools inspect ${{ steps.meta.outputs.tags }}
+          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ env.IMAGE_DIGEST }}
