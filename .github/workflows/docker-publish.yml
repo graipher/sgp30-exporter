@@ -136,9 +136,9 @@ jobs:
           echo "source linux-amd64: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest_linux-amd64 }}"
           echo "source linux-arm64: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest_linux-arm64 }}"
           echo "target ${{ steps.meta.outputs.tags }}"
-          TAGS=$(echo ${{ steps.meta.outputs.tags }} | xargs -n1 echo -t)
+          echo "tags: $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
           docker buildx imagetools create \
-            $TAGS \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest_linux-amd64 }} \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.digest_linux-arm64 }}
 
