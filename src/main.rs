@@ -6,11 +6,18 @@ use std::time::{Duration, SystemTime};
 
 use hal::{Delay, I2cdev};
 use linux_embedded_hal as hal;
-use prometheus_exporter::prometheus::{register_gauge, register_gauge_vec, Gauge};
+use prometheus_exporter::prometheus::{
+    register_counter, register_counter_vec, register_gauge, register_gauge_vec, register_histogram,
+    Counter, CounterVec, Gauge, GaugeVec, Histogram,
+};
 use prometheus_parse::{Scrape, Value};
 use sgp30::{Baseline, Humidity, Measurement, Sgp30};
+use sysinfo::{
+    Components, DiskRefreshKind, Disks, MemoryRefreshKind, Networks, ProcessRefreshKind,
+    ProcessesToUpdate, System,
+};
 use tokio::signal;
-use tokio::time::{sleep, sleep_until, Instant};
+use tokio::time::{sleep_until, Instant};
 
 const DEFAULT_PORT: &str = "9185";
 const DEFAULT_HUMIDITY_URL: &str = "http://raspberrypi5:9521/metrics";
@@ -115,10 +122,16 @@ async fn initialize_sgp30() -> Result<Sgp30<I2cdev, Delay>, Box<dyn Error>> {
         }
     }
 
+    let mut i: u8 = 0;
     loop {
+        if i == 15 {
+            println!("");
+            break;
+        }
+        let sleep_target = Instant::now() + Duration::from_secs(1);
         match sgp.measure() {
             Ok(measurement) => {
-                if measurement.co2eq_ppm != 400 && measurement.tvoc_ppb != 0 {
+                if measurement.co2eq_ppm != 400 || measurement.tvoc_ppb != 0 {
                     println!("");
                     break;
                 } else {
@@ -128,7 +141,8 @@ async fn initialize_sgp30() -> Result<Sgp30<I2cdev, Delay>, Box<dyn Error>> {
             }
             Err(e) => eprintln!("Measurement failed: {:?}", e),
         }
-        sleep(Duration::from_secs(1)).await;
+        i = i + 1;
+        sleep_until(sleep_target).await;
     }
 
     Ok(sgp)
@@ -156,12 +170,94 @@ async fn main_loop(
     tvoc: &Gauge,
     co2eq: &Gauge,
     last_updated: &Gauge,
+    process_cpu_seconds: &Counter,
+    process_resident_memory_bytes: &Gauge,
+    sysinfo_temperature: &GaugeVec,
+    sysinfo_cpu_usage: &GaugeVec,
+    sysinfo_memory_total_bytes: &Gauge,
+    sysinfo_memory_used_bytes: &Gauge,
+    sysinfo_network_bytes_sent: &CounterVec,
+    sysinfo_network_bytes_received: &CounterVec,
+    sysinfo_disk_total_bytes: &GaugeVec,
+    sysinfo_disk_available_bytes: &GaugeVec,
+    sysinfo_disk_read_bytes: &CounterVec,
+    sysinfo_disk_write_bytes: &CounterVec,
+    loop_duration: &Histogram,
     url: &str,
     target_device: &str,
 ) -> Result<(), Box<dyn Error>> {
+    let mut sys = System::new();
+    let mut components = Components::new_with_refreshed_list();
+    let mut networks = Networks::new_with_refreshed_list();
+    let mut disks = Disks::new_with_refreshed_list();
+    let pid = sysinfo::get_current_pid().expect("Failed to get PID");
+
+    let mut last_time = Instant::now();
+    let mut sleep_target = Instant::now();
     let mut i: u16 = 0;
+
     loop {
-        let sleep_target = Instant::now() + Duration::from_secs(1);
+        sleep_target = sleep_target + Duration::from_secs(1);
+        let timer = loop_duration.start_timer();
+
+        // update system metrics
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            true,
+            ProcessRefreshKind::nothing().with_cpu().with_memory(),
+        );
+        if let Some(process) = sys.process(pid) {
+            let now = Instant::now();
+            let elapsed = now.duration_since(last_time).as_secs_f64();
+            let cpu_usage = (process.cpu_usage() / 100.0) as f64; // Convert percentage to fraction
+            process_cpu_seconds.inc_by(cpu_usage * elapsed);
+            process_resident_memory_bytes.set(process.memory() as f64);
+            last_time = now;
+        }
+        components.refresh(true);
+        for component in &components {
+            if let Some(temperature) = component.temperature() {
+                sysinfo_temperature
+                    .with_label_values(&[component.label()])
+                    .set(temperature as f64);
+            }
+        }
+        sys.refresh_cpu_usage();
+        for cpu in sys.cpus() {
+            sysinfo_cpu_usage
+                .with_label_values(&[cpu.name()])
+                .set(cpu.cpu_usage() as f64);
+        }
+        sys.refresh_memory_specifics(MemoryRefreshKind::nothing().with_ram());
+        sysinfo_memory_total_bytes.set(sys.total_memory() as f64);
+        sysinfo_memory_used_bytes.set(sys.used_memory() as f64);
+        networks.refresh(true);
+        for (interface_name, data) in &networks {
+            sysinfo_network_bytes_sent
+                .with_label_values(&[interface_name])
+                .inc_by(data.transmitted() as f64);
+            sysinfo_network_bytes_received
+                .with_label_values(&[interface_name])
+                .inc_by(data.received() as f64);
+        }
+        disks.refresh_specifics(true, DiskRefreshKind::everything());
+        for disk in &disks {
+            let disk_name = disk.name().to_str().unwrap_or("unknown");
+            sysinfo_disk_total_bytes
+                .with_label_values(&[disk_name])
+                .set(disk.total_space() as f64);
+            sysinfo_disk_available_bytes
+                .with_label_values(&[disk_name])
+                .set(disk.available_space() as f64);
+            let usage = disk.usage();
+            sysinfo_disk_read_bytes
+                .with_label_values(&[disk_name])
+                .inc_by(usage.read_bytes as f64);
+            sysinfo_disk_write_bytes
+                .with_label_values(&[disk_name])
+                .inc_by(usage.written_bytes as f64);
+        }
+
         if (i % 60) == 0 {
             match fetch_humidity_metrics(url, target_device).await {
                 Ok((temperature, relative_humidity)) => {
@@ -192,7 +288,7 @@ async fn main_loop(
         }
 
         // Save baseline every 10 minutes
-        if i % 600 == 0 {
+        if i % 600 == 599 {
             match sgp.get_baseline() {
                 Ok(baseline) => {
                     save_baseline(&baseline);
@@ -206,6 +302,7 @@ async fn main_loop(
         }
 
         i = (i + 1) % 600;
+        timer.stop_and_record();
         sleep_until(sleep_target).await;
     }
 }
@@ -225,17 +322,57 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let _exporter = prometheus_exporter::start(binding)?;
 
     let last_updated = register_gauge!("sgp30_last_updated", "Last update timestamp")?;
-    let process_start_time = register_gauge!(
+    let process_start_time = register_counter!(
         "process_start_time_seconds",
         "Process start time in seconds"
     )?;
+    let process_cpu_seconds_total = register_counter!(
+        "process_cpu_seconds_total",
+        "Total CPU seconds consumed by the process"
+    )?;
+    let process_resident_memory_bytes = register_gauge!(
+        "process_resident_memory_bytes",
+        "Size of resident memory set in bytes"
+    )?;
+    let sysinfo_temperature =
+        register_gauge_vec!("sysinfo_temperature", "Temperature in °C", &["label"])?;
+    let sysinfo_cpu_usage =
+        register_gauge_vec!("sysinfo_cpu_usage", "CPU usage in percentage", &["name"])?;
+    let sysinfo_memory_total_bytes =
+        register_gauge!("sysinfo_memory_total_bytes", "Total memory in bytes")?;
+    let sysinfo_memory_used_bytes =
+        register_gauge!("sysinfo_memory_used_bytes", "Used memory in bytes")?;
+    let sysinfo_network_bytes_sent =
+        register_counter_vec!("sysinfo_network_bytes_sent", "Bytes sent", &["interface"])?;
+    let sysinfo_network_bytes_received = register_counter_vec!(
+        "sysinfo_network_bytes_received",
+        "Bytes received",
+        &["interface"]
+    )?;
+    let sysinfo_disk_read_bytes =
+        register_counter_vec!("sysinfo_disk_read_bytes", "Bytes read", &["disk"])?;
+    let sysinfo_disk_write_bytes =
+        register_counter_vec!("sysinfo_disk_write_bytes", "Bytes written", &["disk"])?;
+    let sysinfo_disk_total_bytes =
+        register_gauge_vec!("sysinfo_disk_total_bytes", "Total disk space", &["disk"])?;
+    let sysinfo_disk_available_bytes = register_gauge_vec!(
+        "sysinfo_disk_available_bytes",
+        "Available disk space",
+        &["disk"]
+    )?;
+    let loop_duration = register_histogram!(
+        "loop_duration",
+        "duration of SGP30 measurement loop in seconds"
+    )?;
+
     let tvoc = register_gauge!("sgp30_tvoc", "TVOC in ppb")?;
     let co2eq = register_gauge!("sgp30_co2eq", "CO₂eq in ppm")?;
+    co2eq.set(400 as f64);
 
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)?
         .as_secs();
-    process_start_time.set(now as f64);
+    process_start_time.inc_by(now as f64);
 
     let compile_datetime = compile_time::datetime_str!();
     let rustc_version = compile_time::rustc_version_str!();
@@ -259,7 +396,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut sgp = initialize_sgp30().await?;
 
     tokio::select! {
-        _ = main_loop(&mut sgp, &tvoc, &co2eq, &last_updated, &url, &target_device) => {},
+        _ = main_loop(
+            &mut sgp,
+            &tvoc,
+            &co2eq,
+            &last_updated,
+            &process_cpu_seconds_total,
+            &process_resident_memory_bytes,
+            &sysinfo_temperature,
+            &sysinfo_cpu_usage,
+            &sysinfo_memory_total_bytes,
+            &sysinfo_memory_used_bytes,
+            &sysinfo_network_bytes_sent,
+            &sysinfo_network_bytes_received,
+            &sysinfo_disk_total_bytes,
+            &sysinfo_disk_available_bytes,
+            &sysinfo_disk_read_bytes,
+            &sysinfo_disk_write_bytes,
+            &loop_duration,
+            &url,
+            &target_device,
+        ) => {},
         _ = shutdown_signal() => {},
     }
     Ok(())

@@ -11,7 +11,9 @@ RUN adduser \
     --shell "/sbin/nologin" \
     --no-create-home \
     --uid "${UID}" \
-    "${USER}"
+    "${USER}" \
+    && groupadd i2c \
+    && usermod -aG i2c "${USER}"
 
 RUN apt-get update \
     && apt-get -y upgrade \
