@@ -1,13 +1,14 @@
 use std::env;
 use std::error::Error;
-use std::io::{self, Write};
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Write};
 use std::time::{Duration, SystemTime};
 
 use hal::{Delay, I2cdev};
 use linux_embedded_hal as hal;
 use prometheus_exporter::prometheus::{register_gauge, register_gauge_vec, Gauge};
 use prometheus_parse::{Scrape, Value};
-use sgp30::{Humidity, Measurement, Sgp30};
+use sgp30::{Baseline, Humidity, Measurement, Sgp30};
 use tokio::signal;
 use tokio::time::{sleep, sleep_until, Instant};
 
@@ -18,6 +19,32 @@ const I2C_DEVICE: &str = "/dev/i2c-1";
 const SGP30_ADDRESS: u8 = 0x58;
 const TEMPERATURE_METRIC: &str = "ruuvi_temperature_celsius";
 const HUMIDITY_METRIC: &str = "ruuvi_humidity_ratio";
+const BASELINE_FILE: &str = "sgp30_baseline.dat";
+
+/// Load the baseline from a file if available.
+fn load_baseline() -> Option<Baseline> {
+    let mut file = File::open(BASELINE_FILE).ok()?;
+    let mut content = String::new();
+    file.read_to_string(&mut content).ok()?;
+
+    let mut parts = content.split_whitespace();
+    let co2eq = parts.next()?.parse().ok()?;
+    let tvoc = parts.next()?.parse().ok()?;
+
+    Some(Baseline { co2eq, tvoc })
+}
+
+/// Save the baseline to a file.
+fn save_baseline(baseline: &Baseline) {
+    if let Ok(mut file) = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(BASELINE_FILE)
+    {
+        let _ = writeln!(file, "{} {}", baseline.co2eq, baseline.tvoc);
+    }
+}
 
 /// Calculate vapor pressure (in hPa) from temperature (in °C).
 fn vapor_pressure(t: f64) -> f64 {
@@ -77,6 +104,17 @@ async fn initialize_sgp30() -> Result<Sgp30<I2cdev, Delay>, Box<dyn Error>> {
     println!("Initializing SGP30 with serial number: {:?}", serial_number);
     println!("Feature set: {:?}", feature_set);
 
+    if let Some(baseline) = load_baseline() {
+        if let Err(e) = sgp.set_baseline(&baseline) {
+            eprintln!("Failed to restore baseline: {:?}", e);
+        } else {
+            println!(
+                "Restored baseline - CO₂eq: {}, TVOC: {}",
+                baseline.co2eq, baseline.tvoc
+            );
+        }
+    }
+
     loop {
         match sgp.measure() {
             Ok(measurement) => {
@@ -121,10 +159,10 @@ async fn main_loop(
     url: &str,
     target_device: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let mut i: u8 = 0;
+    let mut i: u16 = 0;
     loop {
         let sleep_target = Instant::now() + Duration::from_secs(1);
-        if i == 0 {
+        if (i % 60) == 0 {
             match fetch_humidity_metrics(url, target_device).await {
                 Ok((temperature, relative_humidity)) => {
                     let now = SystemTime::now()
@@ -152,7 +190,22 @@ async fn main_loop(
             Ok(measurement) => update_metrics(tvoc, co2eq, last_updated, &measurement),
             Err(e) => eprintln!("Measurement failed: {:?}", e),
         }
-        i = (i + 1) % 60;
+
+        // Save baseline every 10 minutes
+        if i % 600 == 0 {
+            match sgp.get_baseline() {
+                Ok(baseline) => {
+                    save_baseline(&baseline);
+                    println!(
+                        "Saved baseline - CO₂eq: {}, TVOC: {}",
+                        baseline.co2eq, baseline.tvoc
+                    );
+                }
+                Err(e) => eprintln!("Failed to get baseline: {:?}", e),
+            }
+        }
+
+        i = (i + 1) % 600;
         sleep_until(sleep_target).await;
     }
 }
