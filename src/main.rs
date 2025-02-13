@@ -1,5 +1,6 @@
 use std::env;
 use std::error::Error;
+use std::io::{self, Write};
 use std::time::{Duration, SystemTime};
 
 use hal::{Delay, I2cdev};
@@ -7,7 +8,8 @@ use linux_embedded_hal as hal;
 use prometheus_exporter::prometheus::{register_gauge, register_gauge_vec, Gauge};
 use prometheus_parse::{Scrape, Value};
 use sgp30::{Humidity, Measurement, Sgp30};
-use tokio::{signal, time::sleep};
+use tokio::signal;
+use tokio::time::{sleep, sleep_until, Instant};
 
 const DEFAULT_PORT: &str = "9185";
 const DEFAULT_HUMIDITY_URL: &str = "http://raspberrypi5:9521/metrics";
@@ -64,7 +66,7 @@ async fn fetch_humidity_metrics(
 }
 
 /// Initialize the SGP30 sensor and return its instance.
-fn initialize_sgp30() -> Result<Sgp30<I2cdev, Delay>, Box<dyn Error>> {
+async fn initialize_sgp30() -> Result<Sgp30<I2cdev, Delay>, Box<dyn Error>> {
     let dev = I2cdev::new(I2C_DEVICE)?;
     let mut sgp = Sgp30::new(dev, SGP30_ADDRESS, Delay);
 
@@ -72,8 +74,24 @@ fn initialize_sgp30() -> Result<Sgp30<I2cdev, Delay>, Box<dyn Error>> {
     let serial_number = sgp.serial().unwrap();
     let feature_set = sgp.get_feature_set().unwrap();
 
-    println!("SGP30 initialized with serial number: {:?}", serial_number);
+    println!("Initializing SGP30 with serial number: {:?}", serial_number);
     println!("Feature set: {:?}", feature_set);
+
+    loop {
+        match sgp.measure() {
+            Ok(measurement) => {
+                if measurement.co2eq_ppm != 400 && measurement.tvoc_ppb != 0 {
+                    println!("");
+                    break;
+                } else {
+                    print!(".");
+                    io::stdout().flush().unwrap();
+                }
+            }
+            Err(e) => eprintln!("Measurement failed: {:?}", e),
+        }
+        sleep(Duration::from_secs(1)).await;
+    }
 
     Ok(sgp)
 }
@@ -89,8 +107,8 @@ fn update_metrics(tvoc: &Gauge, co2eq: &Gauge, last_updated: &Gauge, measurement
     last_updated.set(now as f64);
 
     println!(
-        "Updated metrics - CO₂eq: {} ppm, TVOC: {} ppb",
-        measurement.co2eq_ppm, measurement.tvoc_ppb
+        "{}: Updated metrics - CO₂eq: {} ppm, TVOC: {} ppb",
+        now, measurement.co2eq_ppm, measurement.tvoc_ppb
     );
 }
 
@@ -103,32 +121,39 @@ async fn main_loop(
     url: &str,
     target_device: &str,
 ) -> Result<(), Box<dyn Error>> {
+    let mut i: u8 = 0;
     loop {
-        match fetch_humidity_metrics(url, target_device).await {
-            Ok((temperature, relative_humidity)) => {
-                println!(
-                    "Fetched metrics - Temperature: {:.2} °C, Humidity: {:.2} %",
-                    temperature, relative_humidity
-                );
+        let sleep_target = Instant::now() + Duration::from_secs(1);
+        if i == 0 {
+            match fetch_humidity_metrics(url, target_device).await {
+                Ok((temperature, relative_humidity)) => {
+                    let now = SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs();
 
-                let abs_humidity = absolute_humidity(temperature, relative_humidity);
-                if let Ok(h_abs) = Humidity::from_f32(abs_humidity as f32) {
-                    if let Err(e) = sgp.set_humidity(Some(&h_abs)) {
-                        eprintln!("Failed to set humidity: {:?}", e);
-                    } else {
-                        println!("Set absolute humidity to {:.2} g/m³", abs_humidity);
+                    let abs_humidity = absolute_humidity(temperature, relative_humidity);
+                    if let Ok(h_abs) = Humidity::from_f32(abs_humidity as f32) {
+                        if let Err(e) = sgp.set_humidity(Some(&h_abs)) {
+                            eprintln!("Failed to set humidity: {:?}", e);
+                        } else {
+                            println!(
+                                "{}: Fetched metrics - Temperature: {:.2} °C, Humidity: {:.2} % / {:.2} g/m³",
+                                now, temperature, relative_humidity, abs_humidity
+                            );
+                        }
                     }
                 }
-
-                match sgp.measure() {
-                    Ok(measurement) => update_metrics(tvoc, co2eq, last_updated, &measurement),
-                    Err(e) => eprintln!("Measurement failed: {:?}", e),
-                }
+                Err(e) => eprintln!("Failed to fetch humidity metrics: {:?}", e),
             }
-            Err(e) => eprintln!("Failed to fetch humidity metrics: {:?}", e),
         }
 
-        sleep(Duration::from_secs(1)).await;
+        match sgp.measure() {
+            Ok(measurement) => update_metrics(tvoc, co2eq, last_updated, &measurement),
+            Err(e) => eprintln!("Measurement failed: {:?}", e),
+        }
+        i = (i + 1) % 60;
+        sleep_until(sleep_target).await;
     }
 }
 
@@ -178,7 +203,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let target_device =
         env::var("HUMIDITY_MAC").unwrap_or_else(|_| DEFAULT_HUMIDITY_MAC.to_string());
 
-    let mut sgp = initialize_sgp30()?;
+    let mut sgp = initialize_sgp30().await?;
 
     tokio::select! {
         _ = main_loop(&mut sgp, &tvoc, &co2eq, &last_updated, &url, &target_device) => {},
