@@ -128,7 +128,7 @@ async fn main_loop(
             Err(e) => eprintln!("Failed to fetch humidity metrics: {:?}", e),
         }
 
-        sleep(Duration::from_secs(5)).await;
+        sleep(Duration::from_secs(1)).await;
     }
 }
 
