@@ -7,8 +7,8 @@ use std::time::{Duration, SystemTime};
 use hal::{Delay, I2cdev};
 use linux_embedded_hal as hal;
 use prometheus_exporter::prometheus::{
-    register_counter, register_counter_vec, register_gauge, register_gauge_vec, register_histogram,
-    Counter, CounterVec, Gauge, GaugeVec, Histogram,
+    Counter, CounterVec, Gauge, GaugeVec, Histogram, register_counter, register_counter_vec,
+    register_gauge, register_gauge_vec, register_histogram,
 };
 use prometheus_parse::{Scrape, Value};
 use sgp30::{Baseline, Humidity, Measurement, Sgp30};
@@ -17,7 +17,7 @@ use sysinfo::{
     ProcessesToUpdate, System,
 };
 use tokio::signal;
-use tokio::time::{sleep_until, Instant};
+use tokio::time::{Instant, sleep_until};
 
 const DEFAULT_PORT: &str = "9185";
 const DEFAULT_HUMIDITY_URL: &str = "http://raspberrypi5:9521/metrics";
@@ -112,13 +112,16 @@ async fn initialize_sgp30() -> Result<Sgp30<I2cdev, Delay>, Box<dyn Error>> {
     println!("Feature set: {:?}", feature_set);
 
     if let Some(baseline) = load_baseline() {
-        if let Err(e) = sgp.set_baseline(&baseline) {
-            eprintln!("Failed to restore baseline: {:?}", e);
-        } else {
-            println!(
-                "Restored baseline - CO₂eq: {}, TVOC: {}",
-                baseline.co2eq, baseline.tvoc
-            );
+        match sgp.set_baseline(&baseline) {
+            Err(e) => {
+                eprintln!("Failed to restore baseline: {:?}", e);
+            }
+            _ => {
+                println!(
+                    "Restored baseline - CO₂eq: {}, TVOC: {}",
+                    baseline.co2eq, baseline.tvoc
+                );
+            }
         }
     }
 
