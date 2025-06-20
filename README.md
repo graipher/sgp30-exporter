@@ -22,3 +22,12 @@ docker run -it --rm \
     --device=/dev/i2c-1 \
     sgp30-exporter
 ```
+
+# Cross-compilation
+
+If you want to cross-compile from a x86 to arm64, you need the correct rust toolchain and the correct compiler:
+
+```shell
+rustup target add aarch64-unknown-linux-gnu
+sudo apt-get install -y g++-aarch64-linux-gnu
+```

@@ -382,11 +382,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let rust_info = register_gauge_vec!(
         "rust_info",
         "Info about the Rust version",
-        &["rustc_version", "compile_time"]
+        &["rustc_version", "compile_time", "version"]
     )
     .unwrap();
     rust_info
-        .get_metric_with_label_values(&[rustc_version, compile_datetime])
+        .get_metric_with_label_values(&[rustc_version, compile_datetime, env!("CARGO_PKG_VERSION")])
         .unwrap()
         .set(1.);
 
