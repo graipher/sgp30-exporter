@@ -172,6 +172,7 @@ async fn main_loop(
     sgp: &mut Sgp30<I2cdev, Delay>,
     tvoc: &Gauge,
     co2eq: &Gauge,
+    abs_humidity: &Gauge,
     last_updated: &Gauge,
     process_cpu_seconds: &Counter,
     process_resident_memory_bytes: &Gauge,
@@ -269,14 +270,15 @@ async fn main_loop(
                         .unwrap()
                         .as_secs();
 
-                    let abs_humidity = absolute_humidity(temperature, relative_humidity);
-                    if let Ok(h_abs) = Humidity::from_f32(abs_humidity as f32) {
+                    let abs_humidity_value = absolute_humidity(temperature, relative_humidity);
+                    abs_humidity.set(abs_humidity_value);
+                    if let Ok(h_abs) = Humidity::from_f32(abs_humidity_value as f32) {
                         if let Err(e) = sgp.set_humidity(Some(&h_abs)) {
                             eprintln!("Failed to set humidity: {:?}", e);
                         } else {
                             println!(
                                 "{}: Fetched metrics - Temperature: {:.2} °C, Humidity: {:.2} % / {:.2} g/m³",
-                                now, temperature, relative_humidity, abs_humidity
+                                now, temperature, relative_humidity, abs_humidity_value
                             );
                         }
                     }
@@ -368,14 +370,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "duration of SGP30 measurement loop in seconds"
     )?;
 
+    let abs_humidity = register_gauge!("sgp30_abs_humidity", "Absolute humidity in g/m³")?;
     let tvoc = register_gauge!("sgp30_tvoc", "TVOC in ppb")?;
     let co2eq = register_gauge!("sgp30_co2eq", "CO₂eq in ppm")?;
     co2eq.set(400 as f64);
 
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)?
-        .as_secs();
-    process_start_time.inc_by(now as f64);
+        .as_secs_f64();
+    process_start_time.inc_by(now);
 
     let compile_datetime = compile_time::datetime_str!();
     let rustc_version = compile_time::rustc_version_str!();
@@ -403,6 +406,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             &mut sgp,
             &tvoc,
             &co2eq,
+            &abs_humidity,
             &last_updated,
             &process_cpu_seconds_total,
             &process_resident_memory_bytes,
