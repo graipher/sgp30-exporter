@@ -69,13 +69,13 @@ async fn fetch_humidity_metrics(
     target_device: &str,
 ) -> Result<(f64, f64), Box<dyn Error>> {
     let body = reqwest::get(url).await?.text().await?;
-    let metrics = Scrape::parse(body.lines().map(|s| Ok(s.to_owned())).into_iter())?;
+    let metrics = Scrape::parse(body.lines().map(|s| Ok(s.to_owned())))?;
     let mut temperature = None;
     let mut humidity = None;
 
     for sample in metrics.samples {
-        if let Some(device) = sample.labels.get("device") {
-            if device == target_device {
+        if let Some(device) = sample.labels.get("device")
+            && device == target_device {
                 match sample.metric.as_str() {
                     TEMPERATURE_METRIC => {
                         if let Value::Gauge(v) = sample.value {
@@ -90,7 +90,6 @@ async fn fetch_humidity_metrics(
                     _ => {}
                 }
             }
-        }
     }
 
     match (temperature, humidity) {
@@ -128,14 +127,14 @@ async fn initialize_sgp30() -> Result<Sgp30<I2cdev, Delay>, Box<dyn Error>> {
     let mut i: u8 = 0;
     loop {
         if i == 15 {
-            println!("");
+            println!();
             break;
         }
         let sleep_target = Instant::now() + Duration::from_secs(1);
         match sgp.measure() {
             Ok(measurement) => {
                 if measurement.co2eq_ppm != 400 || measurement.tvoc_ppb != 0 {
-                    println!("");
+                    println!();
                     break;
                 } else {
                     print!(".");
@@ -144,7 +143,7 @@ async fn initialize_sgp30() -> Result<Sgp30<I2cdev, Delay>, Box<dyn Error>> {
             }
             Err(e) => eprintln!("Measurement failed: {:?}", e),
         }
-        i = i + 1;
+        i += 1;
         sleep_until(sleep_target).await;
     }
 
@@ -201,7 +200,7 @@ async fn main_loop(
     let mut i: u16 = 0;
 
     loop {
-        sleep_target = sleep_target + Duration::from_secs(1);
+        sleep_target += Duration::from_secs(1);
         let timer = loop_duration.start_timer();
 
         // update system metrics
@@ -262,7 +261,7 @@ async fn main_loop(
                 .inc_by(usage.written_bytes as f64);
         }
 
-        if (i % 60) == 0 {
+        if i.is_multiple_of(60) {
             match fetch_humidity_metrics(url, target_device).await {
                 Ok((temperature, relative_humidity)) => {
                     let now = SystemTime::now()
@@ -373,7 +372,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let abs_humidity = register_gauge!("sgp30_abs_humidity", "Absolute humidity in g/m³")?;
     let tvoc = register_gauge!("sgp30_tvoc", "TVOC in ppb")?;
     let co2eq = register_gauge!("sgp30_co2eq", "CO₂eq in ppm")?;
-    co2eq.set(400 as f64);
+    co2eq.set(400_f64);
 
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)?
