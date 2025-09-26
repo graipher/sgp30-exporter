@@ -1316,7 +1316,7 @@ dependencies = [
 
 [[package]]
 name = "sgp30-exporter"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "compile-time",
  "embedded-hal",
