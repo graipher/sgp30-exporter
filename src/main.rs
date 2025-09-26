@@ -75,21 +75,22 @@ async fn fetch_humidity_metrics(
 
     for sample in metrics.samples {
         if let Some(device) = sample.labels.get("device")
-            && device == target_device {
-                match sample.metric.as_str() {
-                    TEMPERATURE_METRIC => {
-                        if let Value::Gauge(v) = sample.value {
-                            temperature = Some(v);
-                        }
+            && device == target_device
+        {
+            match sample.metric.as_str() {
+                TEMPERATURE_METRIC => {
+                    if let Value::Gauge(v) = sample.value {
+                        temperature = Some(v);
                     }
-                    HUMIDITY_METRIC => {
-                        if let Value::Gauge(v) = sample.value {
-                            humidity = Some(v * 100.0); // Convert ratio to percentage
-                        }
-                    }
-                    _ => {}
                 }
+                HUMIDITY_METRIC => {
+                    if let Value::Gauge(v) = sample.value {
+                        humidity = Some(v * 100.0); // Convert ratio to percentage
+                    }
+                }
+                _ => {}
             }
+        }
     }
 
     match (temperature, humidity) {
