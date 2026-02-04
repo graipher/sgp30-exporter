@@ -1,6 +1,6 @@
 [package]
 name = "sgp30-exporter"
-version = "0.1.22"
+version = "0.1.23"
 edition = "2024"
 
 [profile.release]
