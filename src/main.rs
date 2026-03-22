@@ -168,6 +168,7 @@ fn update_metrics(tvoc: &Gauge, co2eq: &Gauge, last_updated: &Gauge, measurement
 }
 
 /// Main loop to fetch humidity metrics and update the SGP30 sensor.
+#[allow(clippy::too_many_arguments)]
 async fn main_loop(
     sgp: &mut Sgp30<I2cdev, Delay>,
     tvoc: &Gauge,
