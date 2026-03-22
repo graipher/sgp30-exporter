@@ -1,7 +1,9 @@
 name: Release
 
 permissions:
-  contents: write
+  contents: write # for taiki-e/upload-rust-binary-action
+  id-token: write # for actions/attest
+  attestations: write # for actions/attest
 
 on:
   push:
@@ -12,7 +14,7 @@ jobs:
   create-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: taiki-e/create-gh-release-action@v1
         with:
           # (optional) Path to changelog.
@@ -31,26 +33,34 @@ jobs:
             os: ubuntu-24.04-arm
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: rustup update stable
-      - uses: taiki-e/upload-rust-binary-action@v1
+      - id: build
+        uses: taiki-e/upload-rust-binary-action@v1
         with:
           # (required) Comma-separated list of binary names (non-extension portion of filename) to build and upload.
           # Note that glob pattern is not supported yet.
           bin: sgp30-exporter
+          # (optional) Comma-separated list of algorithms to be used for checksum (sha256, sha512, sha1, or md5)
+          checksum: sha256
           # (optional) Target triple, default is host triple.
           # This is optional but it is recommended that this always be set to
           # clarify which target you are building for if macOS is included in
           # the matrix because GitHub Actions changed the default architecture
           # of macos-latest since macos-14.
           target: ${{ matrix.target }}
+          # (optional) Comma-separated list of additional files to be included to archive.
+          include: README.md,LICENSE
           # (optional) On which platform to distribute the `.tar.gz` file.
           # [default value: unix]
           # [possible values: all, unix, windows, none]
-          tar: all
+          tar: unix
           # (optional) On which platform to distribute the `.zip` file.
           # [default value: windows]
           # [possible values: all, unix, windows, none]
-          zip: none
+          zip: windows
           # (required) GitHub token for uploading assets to GitHub Releases.
           token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/attest@v4
+        with:
+          subject-path: ${{ github.workspace }}/${{ steps.build.outputs.archive }}.*

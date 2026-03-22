@@ -1,12 +1,17 @@
 [package]
 name = "sgp30-exporter"
-version = "0.1.27"
+version = "0.1.28"
 edition = "2024"
+authors = ["Andreas Weiden <andreas.weiden@gmail.com>"]
+readme = "README.md"
+repository = "https://github.com/graipher/sgp30-exporter"
+license = "MIT"
 
 [profile.release]
 lto = true
 codegen-units = 1
 opt-level = 3
+strip = "symbols"
 
 [dependencies]
 compile-time = "0.2.0"
