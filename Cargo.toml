@@ -1,6 +1,6 @@
 [package]
 name = "sgp30-exporter"
-version = "0.1.28"
+version = "0.1.29"
 edition = "2024"
 authors = ["Andreas Weiden <andreas.weiden@gmail.com>"]
 readme = "README.md"

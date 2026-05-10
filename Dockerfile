@@ -1,4 +1,4 @@
-FROM rust:1.94.0-slim-trixie AS builder
+FROM rust:1.95.0-slim-trixie AS builder
 
 RUN update-ca-certificates
 ENV USER=worker
